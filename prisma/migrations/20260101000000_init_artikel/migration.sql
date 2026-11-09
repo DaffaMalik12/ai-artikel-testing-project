@@ -1,0 +1,7 @@
+-- CreateTable
+CREATE TABLE "artikel" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "judul" TEXT NOT NULL,
+    "isi" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
