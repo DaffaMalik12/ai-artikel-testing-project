@@ -57,6 +57,14 @@ export function validasiInputArtikel(payload: unknown): {
   return { judul, isi };
 }
 
+function adalahPrismaKodeP2025(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    (error as { code?: unknown }).code === "P2025"
+  );
+}
+
 export async function ambilSemuaArtikel(opsi?: {
   take?: number;
   skip?: number;
@@ -68,10 +76,42 @@ export async function ambilSemuaArtikel(opsi?: {
   });
 }
 
+export async function ambilArtikelById(id: number) {
+  return prisma.artikel.findUnique({ where: { id } });
+}
+
 export async function buatArtikel(payload: unknown) {
   const { judul, isi } = validasiInputArtikel(payload);
 
   return prisma.artikel.create({
     data: { judul, isi },
   });
+}
+
+/**
+ * Update langsung (tanpa findUnique terlebih dahulu) agar bebas race:
+ * bila artikel dihapus di antara pengecekan dan update, Prisma melempar
+ * P2025 yang di sini dipetakan menjadi `null` (route mengembalikan 404).
+ */
+export async function perbaruiArtikel(id: number, payload: unknown) {
+  const { judul, isi } = validasiInputArtikel(payload);
+
+  try {
+    return await prisma.artikel.update({
+      where: { id },
+      data: { judul, isi },
+    });
+  } catch (error) {
+    if (adalahPrismaKodeP2025(error)) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+export async function hapusArtikel(id: number): Promise<boolean> {
+  const hasil = await prisma.artikel.deleteMany({ where: { id } });
+
+  return hasil.count > 0;
 }

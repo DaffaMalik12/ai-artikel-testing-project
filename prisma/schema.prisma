@@ -16,3 +16,26 @@ model Artikel {
 
   @@map("artikel")
 }
+
+model Pengguna {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  sesi Sesi[]
+
+  @@map("pengguna")
+}
+
+model Sesi {
+  tokenHash   String   @id @map("token_hash")
+  kedaluwarsa DateTime
+  createdAt   DateTime @default(now()) @map("created_at")
+  penggunaId  Int      @map("pengguna_id")
+
+  pengguna Pengguna @relation(fields: [penggunaId], references: [id], onDelete: Cascade)
+
+  @@index([penggunaId])
+  @@map("sesi")
+}
