@@ -12,6 +12,7 @@ model Artikel {
   id        Int      @id @default(autoincrement())
   judul     String
   isi       String
+  gambarUrl String?
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("artikel")
@@ -22,19 +23,17 @@ model Pengguna {
   username     String   @unique
   passwordHash String   @map("password_hash")
   createdAt    DateTime @default(now()) @map("created_at")
-
-  sesi Sesi[]
+  sesi         Sesi[]
 
   @@map("pengguna")
 }
 
 model Sesi {
   tokenHash   String   @id @map("token_hash")
-  kedaluwarsa DateTime
-  createdAt   DateTime @default(now()) @map("created_at")
   penggunaId  Int      @map("pengguna_id")
-
-  pengguna Pengguna @relation(fields: [penggunaId], references: [id], onDelete: Cascade)
+  kedaluwarsa DateTime
+  pengguna    Pengguna @relation(fields: [penggunaId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now()) @map("created_at")
 
   @@index([penggunaId])
   @@map("sesi")
