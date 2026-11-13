@@ -52,6 +52,8 @@ export async function GET(_request: NextRequest, context: RouteContext) {
   }
 
   try {
+    // `ambilArtikelById` mengembalikan objek Prisma utuh, termasuk `gambarUrl`
+    // (nullable) sehingga detail artikel selalu mengekspos gambar terbaru.
     const artikel = await ambilArtikelById(id);
 
     if (artikel === null) {
@@ -104,6 +106,8 @@ export async function PUT(request: NextRequest, context: RouteContext) {
   }
 
   try {
+    // `payload` diteruskan apa adanya; `validasiPayloadArtikel` di service
+    // menangani `judul`, `isi`, dan `gambarUrl` opsional (bila key dikirim).
     const artikel = await perbaruiArtikel(id, payload);
 
     if (artikel === null) {
