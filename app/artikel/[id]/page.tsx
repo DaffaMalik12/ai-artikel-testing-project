@@ -2,35 +2,20 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { formatTanggal, getArtikelById } from "@/lib/artikel";
+import type { Artikel } from "@/app/types/artikel";
+import { getArtikelById } from "@/lib/artikel";
+import { formatTanggal } from "@/lib/utils/tanggal";
+import { ringkasIsi, teksAtauNull } from "@/lib/utils/teks";
 
-type HalamanDetailArtikelProps = {
-  params: Promise<{ id: string }>;
-};
+export const dynamic = "force-dynamic";
 
-const KELAS_TOMBOL_KEMBALI =
-  "inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800";
-
-function ringkasIsi(isi: string, maksimal = 160): string {
-  const bersih = isi.replace(/\s+/g, " ").trim();
-
-  if (bersih.length <= maksimal) {
-    return bersih;
-  }
-
-  return `${bersih.slice(0, maksimal - 1).trimEnd()}…`;
-}
-
-function pecahParagraf(isi: string): string[] {
-  return isi
-    .split(/\n{2,}/)
-    .map((paragraf) => paragraf.trim())
-    .filter((paragraf) => paragraf.length > 0);
-}
+const DESKRIPSI_MAKS = 160;
 
 export async function generateMetadata({
   params,
-}: HalamanDetailArtikelProps): Promise<Metadata> {
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
   const { id } = await params;
 
   try {
@@ -42,58 +27,83 @@ export async function generateMetadata({
 
     return {
       title: artikel.judul,
-      description: ringkasIsi(artikel.isi) || undefined,
+      // Dipotong pada batas kata agar meta description tidak terputus di
+      // tengah kata (revisi QA VO-51 saran 6).
+      description: ringkasIsi(artikel.isi, DESKRIPSI_MAKS),
     };
   } catch {
-    // Detail error tidak pernah dibocorkan ke metadata pengguna.
-    return { title: "Detail Artikel" };
+    return { title: "Artikel" };
   }
 }
 
 export default async function HalamanDetailArtikel({
   params,
-}: HalamanDetailArtikelProps) {
+}: {
+  params: Promise<{ id: string }>;
+}) {
   const { id } = await params;
 
-  const artikel = await getArtikelById(id);
+  let artikel: Artikel | null;
+
+  try {
+    artikel = await getArtikelById(id);
+  } catch (kesalahan) {
+    if (kesalahan instanceof Error) {
+      throw new Error(kesalahan.message);
+    }
+
+    throw kesalahan;
+  }
 
   if (artikel === null) {
     notFound();
   }
 
-  const paragrafIsi = pecahParagraf(artikel.isi);
-  const adaTanggalValid = !Number.isNaN(new Date(artikel.createdAt).getTime());
+  // String kosong/whitespace dianggap belum ada gambar.
+  const gambarUrl = teksAtauNull(artikel.gambarUrl);
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:py-12">
-      <Link href="/artikel" className={KELAS_TOMBOL_KEMBALI}>
-        <span aria-hidden="true">←</span>
-        Kembali ke daftar artikel
-      </Link>
+    <main className="mx-auto w-full max-w-3xl px-4 py-8">
+      <nav aria-label="Navigasi artikel" className="mb-4 text-sm">
+        <Link href="/artikel" className="text-blue-700 hover:underline">
+          &larr; Kembali ke daftar artikel
+        </Link>
+      </nav>
 
-      <article className="mt-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm sm:p-8 dark:border-gray-800 dark:bg-gray-900">
-        <header className="border-b border-gray-100 pb-4 dark:border-gray-800">
-          <h1 className="text-2xl font-bold leading-tight text-gray-900 sm:text-3xl dark:text-gray-50">
+      <article className="flex flex-col gap-4">
+        <header className="flex flex-col gap-1">
+          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">
             {artikel.judul}
           </h1>
-          <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">
-            <time dateTime={adaTanggalValid ? artikel.createdAt : undefined}>
-              Dibuat pada {formatTanggal(artikel.createdAt)}
-            </time>
+          <p className="text-sm text-gray-600">
+            {formatTanggal(artikel.createdAt)}
           </p>
         </header>
 
-        <div className="mt-6 space-y-4 text-base leading-relaxed text-gray-800 dark:text-gray-200">
-          {paragrafIsi.map((paragraf, indeks) => (
-            <p key={indeks}>{paragraf}</p>
-          ))}
+        {gambarUrl !== null ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={gambarUrl}
+            alt={`Gambar artikel ${artikel.judul}`}
+            className="w-full rounded-lg border border-gray-200 object-cover"
+          />
+        ) : (
+          <p className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center text-sm text-gray-700">
+            Artikel ini belum memiliki gambar.
+          </p>
+        )}
+
+        <div className="whitespace-pre-line text-base leading-relaxed text-gray-800">
+          {artikel.isi}
         </div>
       </article>
 
-      <div className="mt-8">
-        <Link href="/artikel" className={KELAS_TOMBOL_KEMBALI}>
-          <span aria-hidden="true">←</span>
-          Kembali ke daftar artikel
+      <div className="mt-6 flex flex-wrap gap-3">
+        <Link
+          href={`/artikel/${encodeURIComponent(artikel.id)}/edit`}
+          className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-900"
+        >
+          Edit artikel
         </Link>
       </div>
     </main>
