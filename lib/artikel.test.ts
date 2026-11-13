@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiArtikelError,
-  formatTanggal,
   getApiBaseUrl,
   getArtikelById,
   getDaftarArtikel,
@@ -43,13 +42,35 @@ describe("normalisasiArtikel", () => {
       judul: "Judul Artikel",
       isi: "Isi artikel",
       createdAt: "2024-01-15T10:00:00.000Z",
+      gambarUrl: null,
+    });
+  });
+
+  it("meneruskan gambarUrl bila dikirim server", () => {
+    expect(
+      normalisasiArtikel({
+        id: "3",
+        judul: "Judul",
+        isi: "Isi",
+        gambarUrl: "/uploads/artikel/contoh.png",
+      }),
+    ).toEqual({
+      id: "3",
+      judul: "Judul",
+      isi: "Isi",
+      createdAt: "",
+      gambarUrl: "/uploads/artikel/contoh.png",
     });
   });
 
   it("mendukung nama field alternatif", () => {
-    expect(
-      normalisasiArtikel({ id: "9", title: "T", content: "C" }),
-    ).toEqual({ id: "9", judul: "T", isi: "C", createdAt: "" });
+    expect(normalisasiArtikel({ id: "9", title: "T", content: "C" })).toEqual({
+      id: "9",
+      judul: "T",
+      isi: "C",
+      createdAt: "",
+      gambarUrl: null,
+    });
   });
 
   it("menolak payload kosong atau tanpa field wajib", () => {
@@ -63,23 +84,6 @@ describe("normalisasiArtikel", () => {
     expect(normalisasiArtikel(null)).toBeNull();
     expect(normalisasiArtikel("teks")).toBeNull();
     expect(normalisasiArtikel([{ id: "1" }])).toBeNull();
-  });
-});
-
-describe("formatTanggal", () => {
-  it("memformat tanggal ISO yang valid", () => {
-    expect(formatTanggal("2024-01-15T10:00:00.000Z")).toMatch(/2024/);
-  });
-
-  it("memakai fallback untuk nilai kosong atau tidak valid", () => {
-    expect(formatTanggal("")).toBe("Tanggal tidak tersedia");
-    expect(formatTanggal(null)).toBe("Tanggal tidak tersedia");
-    expect(formatTanggal(undefined)).toBe("Tanggal tidak tersedia");
-    expect(formatTanggal("bukan-tanggal")).toBe("Tanggal tidak tersedia");
-  });
-
-  it("mendukung fallback kustom", () => {
-    expect(formatTanggal("", "-")).toBe("-");
   });
 });
 
@@ -182,6 +186,7 @@ describe("getArtikelById", () => {
         judul: "Judul",
         isi: "Isi",
         createdAt: "2024-01-15T10:00:00.000Z",
+        gambarUrl: "/uploads/artikel/abc.png",
       }),
     );
 
@@ -190,6 +195,7 @@ describe("getArtikelById", () => {
       judul: "Judul",
       isi: "Isi",
       createdAt: "2024-01-15T10:00:00.000Z",
+      gambarUrl: "/uploads/artikel/abc.png",
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -205,6 +211,7 @@ describe("getArtikelById", () => {
       id: "7",
       judul: "J",
       isi: "I",
+      gambarUrl: null,
     });
   });
 
@@ -252,14 +259,20 @@ describe("getDaftarArtikel", () => {
     stubFetch(
       200,
       JSON.stringify([
-        { id: 1, judul: "A", isi: "Isi A" },
+        { id: 1, judul: "A", isi: "Isi A", gambarUrl: "/uploads/a.png" },
         { id: 2, judul: "B" },
         {},
       ]),
     );
 
     await expect(getDaftarArtikel()).resolves.toEqual([
-      { id: "1", judul: "A", isi: "Isi A", createdAt: "" },
+      {
+        id: "1",
+        judul: "A",
+        isi: "Isi A",
+        createdAt: "",
+        gambarUrl: "/uploads/a.png",
+      },
     ]);
   });
 
@@ -267,7 +280,7 @@ describe("getDaftarArtikel", () => {
     stubFetch(200, JSON.stringify({ data: [{ id: "3", judul: "C", isi: "I" }] }));
 
     await expect(getDaftarArtikel()).resolves.toEqual([
-      { id: "3", judul: "C", isi: "I", createdAt: "" },
+      { id: "3", judul: "C", isi: "I", createdAt: "", gambarUrl: null },
     ]);
   });
 

@@ -1,27 +1,26 @@
-/** Data lengkap satu artikel sesuai kontrak `GET /api/artikel/:id`. */
-export interface Artikel {
-  id: string;
-  judul: string;
-  isi: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 /**
- * Bentuk data minimal yang dibutuhkan halaman daftar artikel.
+ * Artikel ringkas untuk kebutuhan daftar.
  *
- * `GET /api/artikel` mengembalikan array objek penuh, tetapi daftar hanya
- * memakai `id`, `judul`, dan `createdAt`. Memakai tipe ini membuat fungsi
- * normalisasi tidak perlu memalsukan `isi`/`updatedAt` — sumber error
- * type-check sebelumnya.
+ * `gambarUrl` selalu ada (bukan opsional) agar komponen tidak perlu menebak
+ * antara `undefined`, `null`, dan string kosong: `null` berarti belum ada
+ * gambar.
  */
 export interface ArtikelDaftar {
   id: string;
   judul: string;
   createdAt: string;
+  gambarUrl: string | null;
 }
 
-export interface ArtikelPayload {
+/**
+ * Artikel lengkap (dengan isi) untuk halaman detail dan edit.
+ * Sengaja tidak `extends ArtikelDaftar` supaya kontrak tiap bentuk data
+ * eksplisit dan tidak ada properti opsional yang membingungkan.
+ */
+export interface Artikel {
+  id: string;
   judul: string;
   isi: string;
+  createdAt: string;
+  gambarUrl: string | null;
 }

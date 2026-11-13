@@ -1,204 +1,421 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 
 import ArtikelItem from "@/app/components/ArtikelItem";
-import { ambilDaftarArtikel, hapusArtikel } from "@/app/lib/artikel";
+import {
+  ApiArtikelError,
+  ambilDaftarArtikel,
+  hapusArtikel,
+} from "@/lib/api/artikel";
 import type { ArtikelDaftar } from "@/app/types/artikel";
 
-function pesanDariError(error: unknown, pesanDefault: string): string {
-  if (error instanceof Error && error.message.trim() !== "") {
-    return error.message;
-  }
+const PESAN_GAGAL_MUAT =
+  "Gagal memuat daftar artikel. Coba lagi beberapa saat lagi.";
+const PESAN_GAGAL_HAPUS =
+  "Gagal menghapus artikel. Coba lagi beberapa saat lagi.";
 
-  return pesanDefault;
-}
+const SELEKTOR_FOKUS =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-function adalahErrorPembatalan(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
-export default function DaftarArtikel() {
-  const [artikel, setArtikel] = useState<ArtikelDaftar[]>([]);
-  const [sedangMemuat, setSedangMemuat] = useState<boolean>(true);
-  const [pesanError, setPesanError] = useState<string | null>(null);
-  const [pesanSukses, setPesanSukses] = useState<string | null>(null);
+/**
+ * State penghapusan artikel + modal konfirmasi (termasuk Escape & focus trap).
+ * Dipisah ke hook agar jalur presentational dan container memakai logika yang
+ * sama tanpa duplikasi.
+ */
+function usePenghapusArtikel(
+  setDaftar: Dispatch<SetStateAction<ArtikelDaftar[]>>,
+) {
   const [idYangDihapus, setIdYangDihapus] = useState<string | null>(null);
-  const [artikelYangDikonfirmasi, setArtikelYangDikonfirmasi] =
-    useState<ArtikelDaftar | null>(null);
-  const [penandaMuatUlang, setPenandaMuatUlang] = useState<number>(0);
+  const [idSedangDihapus, setIdSedangDihapus] = useState<string | null>(null);
+  const [galatHapus, setGalatHapus] = useState<string | null>(null);
+  const [pesanSukses, setPesanSukses] = useState<string | null>(null);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    let masihAktif = true;
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  // Elemen pemicu modal, untuk memulihkan fokus saat modal ditutup.
+  const pemicuRef = useRef<HTMLElement | null>(null);
 
-    async function muatArtikel() {
-      setSedangMemuat(true);
-      setPesanError(null);
+  const tutupModal = useCallback(() => {
+    setIdYangDihapus(null);
 
-      try {
-        const data = await ambilDaftarArtikel(controller.signal);
+    const pemicu = pemicuRef.current;
+    pemicuRef.current = null;
 
-        if (!masihAktif) {
-          return;
-        }
-
-        setArtikel(data);
-      } catch (error: unknown) {
-        if (!masihAktif || adalahErrorPembatalan(error)) {
-          return;
-        }
-
-        setArtikel([]);
-        setPesanError(pesanDariError(error, "Gagal memuat daftar artikel."));
-      } finally {
-        if (masihAktif) {
-          setSedangMemuat(false);
-        }
-      }
+    if (pemicu !== null && typeof pemicu.focus === "function") {
+      pemicu.focus();
     }
+  }, []);
 
-    void muatArtikel();
+  // Fokuskan dialog saat dibuka agar pengguna keyboard langsung berada di modal.
+  useEffect(() => {
+    if (idYangDihapus !== null) {
+      dialogRef.current?.focus();
+    }
+  }, [idYangDihapus]);
 
-    return () => {
-      masihAktif = false;
-      controller.abort();
-    };
-  }, [penandaMuatUlang]);
-
-  function mintaKonfirmasiHapus(target: ArtikelDaftar) {
-    setPesanError(null);
-    setPesanSukses(null);
-    setArtikelYangDikonfirmasi(target);
-  }
-
-  function batalkanHapus() {
-    setArtikelYangDikonfirmasi(null);
-  }
-
-  async function konfirmasiHapus() {
-    if (artikelYangDikonfirmasi === null) {
+  // Escape menutup modal (kecuali sedang menghapus).
+  useEffect(() => {
+    if (idYangDihapus === null) {
       return;
     }
 
-    const target = artikelYangDikonfirmasi;
-    setIdYangDihapus(target.id);
-    setPesanError(null);
+    function tanganiTombol(event: KeyboardEvent) {
+      if (event.key === "Escape" && idSedangDihapus === null) {
+        setGalatHapus(null);
+        tutupModal();
+      }
+    }
+
+    window.addEventListener("keydown", tanganiTombol);
+
+    return () => {
+      window.removeEventListener("keydown", tanganiTombol);
+    };
+  }, [idYangDihapus, idSedangDihapus, tutupModal]);
+
+  // Focus trap: Tab/Shift+Tab berputar di dalam dialog (revisi QA VO-51 saran 5).
+  useEffect(() => {
+    if (idYangDihapus === null) {
+      return;
+    }
+
+    const dialog = dialogRef.current;
+
+    if (dialog === null) {
+      return;
+    }
+
+    function tanganiTab(event: KeyboardEvent) {
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const daftarFokus = Array.from(
+        dialog.querySelectorAll<HTMLElement>(SELEKTOR_FOKUS),
+      );
+
+      if (daftarFokus.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const pertama = daftarFokus[0];
+      const terakhir = daftarFokus[daftarFokus.length - 1];
+      const aktif = document.activeElement;
+
+      if (event.shiftKey) {
+        if (
+          aktif === pertama ||
+          aktif === dialog ||
+          !dialog.contains(aktif)
+        ) {
+          event.preventDefault();
+          terakhir.focus();
+        }
+
+        return;
+      }
+
+      if (aktif === terakhir || aktif === dialog || !dialog.contains(aktif)) {
+        event.preventDefault();
+        pertama.focus();
+      }
+    }
+
+    dialog.addEventListener("keydown", tanganiTab);
+
+    return () => {
+      dialog.removeEventListener("keydown", tanganiTab);
+    };
+  }, [idYangDihapus]);
+
+  const mintaHapus = useCallback((id: string) => {
+    if (typeof document !== "undefined") {
+      const aktif = document.activeElement;
+      pemicuRef.current = aktif instanceof HTMLElement ? aktif : null;
+    }
+
     setPesanSukses(null);
+    setGalatHapus(null);
+    setIdYangDihapus(id);
+  }, []);
+
+  const batalkanHapus = useCallback(() => {
+    if (idSedangDihapus !== null) {
+      return;
+    }
+
+    setGalatHapus(null);
+    tutupModal();
+  }, [idSedangDihapus, tutupModal]);
+
+  const konfirmasiHapus = useCallback(async () => {
+    if (idYangDihapus === null || idSedangDihapus !== null) {
+      return;
+    }
+
+    const idTarget = idYangDihapus;
+    setIdSedangDihapus(idTarget);
+    setGalatHapus(null);
 
     try {
-      await hapusArtikel(target.id);
-      setArtikel((daftarSebelumnya) =>
-        daftarSebelumnya.filter((item) => item.id !== target.id),
+      await hapusArtikel(idTarget);
+      setDaftar((sebelumnya) =>
+        sebelumnya.filter((item) => item.id !== idTarget),
       );
-      setPesanSukses(`Artikel "${target.judul}" berhasil dihapus.`);
-    } catch (error: unknown) {
-      setPesanError(pesanDariError(error, `Gagal menghapus artikel "${target.judul}".`));
+      setPesanSukses("Artikel berhasil dihapus.");
+    } catch (kesalahan) {
+      setGalatHapus(
+        kesalahan instanceof ApiArtikelError
+          ? kesalahan.message
+          : PESAN_GAGAL_HAPUS,
+      );
     } finally {
-      setIdYangDihapus(null);
-      setArtikelYangDikonfirmasi(null);
+      setIdSedangDihapus(null);
+      // Selalu tutup modal + pulihkan fokus ke tombol pemicu.
+      tutupModal();
     }
-  }
+  }, [idYangDihapus, idSedangDihapus, setDaftar, tutupModal]);
 
-  const sedangMenghapus = idYangDihapus !== null;
+  return {
+    idYangDihapus,
+    idSedangDihapus,
+    galatHapus,
+    pesanSukses,
+    mintaHapus,
+    batalkanHapus,
+    konfirmasiHapus,
+    dialogRef,
+  };
+}
+
+interface PropsIsiDaftar {
+  daftar: ArtikelDaftar[];
+  penghapus: ReturnType<typeof usePenghapusArtikel>;
+}
+
+/** Bagian tampilan (banner, list/empty, modal) yang dipakai kedua jalur. */
+function IsiDaftar({ daftar, penghapus }: PropsIsiDaftar) {
+  const {
+    idYangDihapus,
+    idSedangDihapus,
+    galatHapus,
+    pesanSukses,
+    mintaHapus,
+    batalkanHapus,
+    konfirmasiHapus,
+    dialogRef,
+  } = penghapus;
 
   return (
-    <section aria-labelledby="judul-daftar-artikel">
-      <h2 id="judul-daftar-artikel" className="sr-only">
-        Daftar artikel
-      </h2>
-
-      <div aria-live="polite" className="mb-4 flex flex-col gap-2">
-        {pesanSukses !== null ? (
-          <p
-            role="status"
-            className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-200"
-          >
-            {pesanSukses}
-          </p>
-        ) : null}
-
-        {pesanError !== null ? (
-          <div
-            role="alert"
-            className="flex flex-col gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 sm:flex-row sm:items-center sm:justify-between dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
-          >
-            <span>{pesanError}</span>
-            <button
-              type="button"
-              onClick={() => setPenandaMuatUlang((nilai) => nilai + 1)}
-              className="inline-flex min-h-9 items-center justify-center self-start rounded-md border border-red-300 px-3 py-1 text-sm font-medium text-red-800 hover:bg-red-100 sm:self-auto dark:border-red-800 dark:text-red-200 dark:hover:bg-red-900/40"
-            >
-              Coba lagi
-            </button>
-          </div>
-        ) : null}
-      </div>
-
-      {sedangMemuat ? (
-        <p role="status" className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-          Memuat daftar artikel...
+    <div className="flex flex-col gap-3">
+      {pesanSukses !== null && (
+        <p
+          role="status"
+          className="rounded-md border border-green-300 bg-green-50 px-4 py-2 text-sm text-green-800"
+        >
+          {pesanSukses}
         </p>
-      ) : null}
+      )}
 
-      {!sedangMemuat && artikel.length === 0 && pesanError === null ? (
-        <p className="rounded-lg border border-dashed border-gray-300 bg-white py-8 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
-          Belum ada artikel.
+      {galatHapus !== null && (
+        <p
+          role="alert"
+          className="rounded-md border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800"
+        >
+          {galatHapus}
         </p>
-      ) : null}
+      )}
 
-      {!sedangMemuat && artikel.length > 0 ? (
+      {daftar.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center text-sm text-gray-700">
+          Belum ada artikel. Silakan tambahkan artikel baru.
+        </p>
+      ) : (
         <ul className="flex flex-col gap-3">
-          {artikel.map((item) => (
+          {daftar.map((item) => (
             <ArtikelItem
               key={item.id}
               artikel={item}
-              sedangDihapus={idYangDihapus === item.id}
-              onHapus={mintaKonfirmasiHapus}
+              onHapus={mintaHapus}
+              sedangMenghapus={idSedangDihapus === item.id}
+              nonaktif={idSedangDihapus !== null}
             />
           ))}
         </ul>
-      ) : null}
+      )}
 
-      {artikelYangDikonfirmasi !== null ? (
+      {idYangDihapus !== null && (
         <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="judul-konfirmasi-hapus"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              batalkanHapus();
+            }
+          }}
         >
-          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-lg dark:bg-gray-900">
-            <h3
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="judul-konfirmasi-hapus"
+            tabIndex={-1}
+            className="w-full max-w-sm rounded-lg bg-white p-5 shadow-lg outline-none"
+          >
+            <h2
               id="judul-konfirmasi-hapus"
-              className="text-base font-semibold text-gray-900 dark:text-gray-50"
+              className="text-base font-semibold text-gray-900"
             >
               Hapus artikel ini?
-            </h3>
-            <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-              Artikel &quot;{artikelYangDikonfirmasi.judul}&quot; akan dihapus permanen.
+            </h2>
+            <p className="mt-2 text-sm text-gray-700">
               Tindakan ini tidak dapat dibatalkan.
             </p>
-            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 onClick={batalkanHapus}
-                disabled={sedangMenghapus}
-                className="inline-flex min-h-10 items-center justify-center rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+                disabled={idSedangDihapus !== null}
+                className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Batal
               </button>
               <button
                 type="button"
-                onClick={konfirmasiHapus}
-                disabled={sedangMenghapus}
-                className="inline-flex min-h-10 items-center justify-center rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void konfirmasiHapus()}
+                disabled={idSedangDihapus !== null}
+                aria-busy={idSedangDihapus !== null}
+                className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {sedangMenghapus ? "Menghapus..." : "Ya, hapus"}
+                {idSedangDihapus !== null ? "Menghapus…" : "Ya, hapus"}
               </button>
             </div>
           </div>
         </div>
-      ) : null}
-    </section>
+      )}
+    </div>
   );
+}
+
+/** Jalur container: memanggil API sendiri (loading/error/empty/success). */
+function DaftarArtikelDinamis() {
+  const [daftar, setDaftar] = useState<ArtikelDaftar[]>([]);
+  const [sedangMemuat, setSedangMemuat] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [percobaan, setPercobaan] = useState(0);
+
+  const penghapus = usePenghapusArtikel(setDaftar);
+
+  useEffect(() => {
+    const kontrol = new AbortController();
+    let aktif = true;
+
+    setSedangMemuat(true);
+    setError(null);
+
+    (async () => {
+      try {
+        const hasil = await ambilDaftarArtikel(kontrol.signal);
+
+        if (!aktif) {
+          return;
+        }
+
+        setDaftar(hasil);
+      } catch (kesalahan) {
+        if (!aktif || kontrol.signal.aborted) {
+          return;
+        }
+
+        setError(
+          kesalahan instanceof ApiArtikelError
+            ? kesalahan.message
+            : PESAN_GAGAL_MUAT,
+        );
+      } finally {
+        if (aktif) {
+          setSedangMemuat(false);
+        }
+      }
+    })();
+
+    return () => {
+      aktif = false;
+      kontrol.abort();
+    };
+  }, [percobaan]);
+
+  if (sedangMemuat) {
+    return (
+      <div aria-busy="true" className="flex flex-col gap-3">
+        <p className="text-sm text-gray-700" role="status">
+          Memuat daftar artikel…
+        </p>
+        <ul className="flex flex-col gap-3">
+          {[0, 1, 2].map((kunci) => (
+            <li
+              key={kunci}
+              className="h-24 animate-pulse rounded-lg border border-gray-200 bg-gray-100"
+            />
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
+  if (error !== null) {
+    return (
+      <div className="flex flex-col items-start gap-3 rounded-lg border border-red-300 bg-red-50 p-4">
+        <p role="alert" className="text-sm text-red-800">
+          {error}
+        </p>
+        <button
+          type="button"
+          onClick={() => setPercobaan((nilai) => nilai + 1)}
+          className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-700"
+        >
+          Coba lagi
+        </button>
+      </div>
+    );
+  }
+
+  return <IsiDaftar daftar={daftar} penghapus={penghapus} />;
+}
+
+/**
+ * Jalur presentational: data sepenuhnya dari prop (tanpa fetch, tanpa effect
+ * yang bergantung pada array hasil komputasi tiap render) — revisi QA VO-51
+ * poin 1.
+ */
+function DaftarArtikelStatis({ daftarAwal }: { daftarAwal: ArtikelDaftar[] }) {
+  const [daftar, setDaftar] = useState<ArtikelDaftar[]>(daftarAwal);
+  const penghapus = usePenghapusArtikel(setDaftar);
+
+  return <IsiDaftar daftar={daftar} penghapus={penghapus} />;
+}
+
+interface PropsDaftarArtikel {
+  /**
+   * Bila diberikan, komponen menjadi presentational dan tidak mem-fetch.
+   * Berguna untuk pengujian dan pemakaian di dalam container lain.
+   */
+  artikel?: ArtikelDaftar[];
+}
+
+export default function DaftarArtikel({ artikel }: PropsDaftarArtikel = {}) {
+  if (artikel !== undefined) {
+    return <DaftarArtikelStatis daftarAwal={artikel} />;
+  }
+
+  return <DaftarArtikelDinamis />;
 }

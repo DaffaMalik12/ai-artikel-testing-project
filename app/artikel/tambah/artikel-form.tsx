@@ -2,190 +2,212 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 
-import { pesanErrorDari, tambahArtikel } from "@/lib/api/artikel";
+import UnggahGambarArtikel from "@/app/components/UnggahGambarArtikel";
 import {
-  ISI_MAKS_KARAKTER,
-  JUDUL_MAKS_KARAKTER,
-  siapkanPayload,
-  validasiArtikel,
-  type ErrorFieldArtikel,
-} from "@/lib/artikel-validasi";
+  ApiArtikelError,
+  tambahArtikel,
+  unggahGambarArtikel,
+} from "@/lib/api/artikel";
+import { KUNCI_GALAT_GAMBAR } from "@/lib/konstanta-gambar";
+import {
+  adaGalatFormArtikel,
+  validasiFormArtikel,
+  type GalatFormArtikel,
+} from "@/lib/validasi-form-artikel";
 
-const PESAN_SIMPAN_GAGAL = "Gagal menyimpan artikel. Silakan coba lagi.";
+type TahapSimpan = "idle" | "menyimpan" | "mengunggah";
 
-const KELAS_FIELD_DASAR =
-  "mt-1 block w-full rounded-md border px-3 py-2 text-sm text-gray-900 shadow-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:bg-gray-50 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:disabled:bg-gray-800";
-
-const KELAS_FIELD_NORMAL =
-  "border-gray-300 focus:border-blue-500 focus:ring-blue-500/30 dark:border-gray-700";
-
-const KELAS_FIELD_ERROR =
-  "border-red-400 focus:border-red-500 focus:ring-red-500/30 dark:border-red-700";
-
-const KELAS_TOMBOL_UTAMA =
-  "inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:bg-blue-400";
-
-const KELAS_TOMBOL_SEKUNDER =
-  "inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800";
+const PESAN_ID_TIDAK_DIKENAL =
+  "Artikel sudah tersimpan, tetapi server tidak mengembalikan ID artikel sehingga gambar belum terunggah. Form dikunci agar tidak terbuat artikel duplikat — buka daftar artikel lalu gunakan menu Edit untuk menambahkan gambar.";
 
 export default function ArtikelForm() {
   const router = useRouter();
-  const refJudul = useRef<HTMLInputElement>(null);
-  const refIsi = useRef<HTMLTextAreaElement>(null);
 
   const [judul, setJudul] = useState("");
   const [isi, setIsi] = useState("");
-  const [fieldErrors, setFieldErrors] = useState<ErrorFieldArtikel>({});
-  const [pesanError, setPesanError] = useState<string | null>(null);
-  const [sedangMenyimpan, setSedangMenyimpan] = useState(false);
+  const [galat, setGalat] = useState<GalatFormArtikel>({});
+  const [galatUmum, setGalatUmum] = useState<string | null>(null);
+  const [tahap, setTahap] = useState<TahapSimpan>("idle");
+  const [berkasGambar, setBerkasGambar] = useState<File | null>(null);
 
-  function handleJudulChange(event: ChangeEvent<HTMLInputElement>) {
-    setJudul(event.target.value);
-    setFieldErrors((sebelumnya) => ({ ...sebelumnya, judul: undefined }));
-  }
+  // Dipakai saat server 201 tanpa `id`: artikel sudah tercipta tetapi kita
+  // tidak punya handle untuk unggah gambar. Form dikunci permanen supaya
+  // pengguna tidak menekan submit lagi dan membuat artikel duplikat.
+  const [terkunciPermanen, setTerkunciPermanen] = useState(false);
 
-  function handleIsiChange(event: ChangeEvent<HTMLTextAreaElement>) {
-    setIsi(event.target.value);
-    setFieldErrors((sebelumnya) => ({ ...sebelumnya, isi: undefined }));
-  }
+  const sedangProsesRef = useRef(false);
+  const sedangMenyimpan = tahap !== "idle";
+  const formNonaktif = sedangMenyimpan || terkunciPermanen;
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  const labelTombol =
+    tahap === "mengunggah"
+      ? "Mengunggah gambar…"
+      : tahap === "menyimpan"
+        ? "Menyimpan…"
+        : "Simpan artikel";
+
+  async function tanganiSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (sedangMenyimpan) {
+    if (sedangProsesRef.current || terkunciPermanen) {
       return;
     }
 
-    setPesanError(null);
+    const galatValidasi = validasiFormArtikel(judul, isi);
 
-    const errors = validasiArtikel(judul, isi);
-    setFieldErrors(errors);
-
-    if (errors.judul !== undefined) {
-      refJudul.current?.focus();
+    if (adaGalatFormArtikel(galatValidasi)) {
+      setGalat(galatValidasi);
+      setGalatUmum(null);
       return;
     }
 
-    if (errors.isi !== undefined) {
-      refIsi.current?.focus();
-      return;
-    }
-
-    setSedangMenyimpan(true);
+    sedangProsesRef.current = true;
+    setTahap("menyimpan");
+    setGalat({});
+    setGalatUmum(null);
 
     try {
-      // `siapkanPayload` memangkas judul saja; isi artikel dikirim apa adanya.
-      await tambahArtikel(siapkanPayload(judul, isi));
+      const artikel = await tambahArtikel({
+        judul: judul.trim(),
+        isi: isi.trim(),
+      });
 
-      // `replace` agar tombol back tidak kembali ke formulir yang sudah terkirim.
+      if (berkasGambar !== null && artikel.id === "") {
+        // Kontrak server dilanggar (201 tanpa body): gambar tidak bisa
+        // diunggah karena `id` tidak diketahui. Beri arahan jelas dan kunci
+        // form agar tidak terjadi artikel duplikat.
+        setGalatUmum(PESAN_ID_TIDAK_DIKENAL);
+        setBerkasGambar(null);
+        setTerkunciPermanen(true);
+        return;
+      }
+
+      if (berkasGambar !== null) {
+        // Artikel harus tersimpan lebih dulu agar punya `id` untuk endpoint gambar.
+        setTahap("mengunggah");
+
+        try {
+          await unggahGambarArtikel(artikel.id, berkasGambar);
+        } catch (kesalahanGambar) {
+          // Artikel sudah tersimpan. Tampilkan notifikasi kegagalan (AC 3) DAN
+          // arahkan ke halaman edit dengan penanda agar pengguna bisa
+          // mengunggah ulang gambar tanpa membuat artikel duplikat.
+          const pesanGambar =
+            kesalahanGambar instanceof ApiArtikelError
+              ? kesalahanGambar.message
+              : "Gambar gagal diunggah.";
+
+          setGalatUmum(
+            `${pesanGambar} Artikel sudah tersimpan — silakan unggah ulang gambar dari halaman edit.`,
+          );
+
+          router.replace(
+            `/artikel/${encodeURIComponent(artikel.id)}/edit?${KUNCI_GALAT_GAMBAR}=1`,
+          );
+          router.refresh();
+          return;
+        }
+      }
+
       router.replace("/artikel");
       router.refresh();
-    } catch (error) {
-      setSedangMenyimpan(false);
-
-      const pesan = pesanErrorDari(error, PESAN_SIMPAN_GAGAL);
-
-      // Pesan 400 dari server menyebut "judul" atau "isi"; arahkan ke field terkait.
-      if (/judul/i.test(pesan)) {
-        setFieldErrors((sebelumnya) => ({ ...sebelumnya, judul: pesan }));
-        refJudul.current?.focus();
-        return;
+    } catch (kesalahan) {
+      if (kesalahan instanceof ApiArtikelError) {
+        if (kesalahan.field === "judul" || kesalahan.field === "isi") {
+          setGalat({ [kesalahan.field]: kesalahan.message });
+        } else {
+          setGalatUmum(kesalahan.message);
+        }
+      } else {
+        setGalatUmum(
+          "Terjadi kesalahan tak terduga. Coba lagi beberapa saat lagi.",
+        );
       }
-
-      if (/\bisi\b/i.test(pesan)) {
-        setFieldErrors((sebelumnya) => ({ ...sebelumnya, isi: pesan }));
-        refIsi.current?.focus();
-        return;
-      }
-
-      setPesanError(pesan);
+    } finally {
+      sedangProsesRef.current = false;
+      setTahap("idle");
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate aria-busy={sedangMenyimpan} className="space-y-6">
-      {pesanError !== null && (
+    <form onSubmit={tanganiSubmit} noValidate className="flex flex-col gap-5">
+      {galatUmum !== null && (
         <p
           role="alert"
-          className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+          className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800"
         >
-          {pesanError}
+          {galatUmum}
         </p>
       )}
 
-      <div>
-        <label htmlFor="judul" className="block text-sm font-medium text-gray-900 dark:text-gray-100">
-          Judul Artikel
+      <div className="flex flex-col gap-1">
+        <label htmlFor="judul" className="text-sm font-medium text-gray-800">
+          Judul artikel
         </label>
         <input
           id="judul"
           name="judul"
-          ref={refJudul}
           type="text"
           value={judul}
-          onChange={handleJudulChange}
-          maxLength={JUDUL_MAKS_KARAKTER}
-          required
-          disabled={sedangMenyimpan}
-          aria-invalid={fieldErrors.judul !== undefined}
-          aria-describedby={fieldErrors.judul !== undefined ? "judul-error" : "judul-hint"}
-          placeholder="Contoh: Cara Menulis Artikel yang Baik"
-          className={`${KELAS_FIELD_DASAR} ${
-            fieldErrors.judul !== undefined ? KELAS_FIELD_ERROR : KELAS_FIELD_NORMAL
-          }`}
+          onChange={(event) => setJudul(event.target.value)}
+          disabled={formNonaktif}
+          aria-invalid={galat.judul !== undefined}
+          aria-describedby={galat.judul !== undefined ? "galat-judul" : undefined}
+          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-900 disabled:bg-gray-100"
         />
-        {fieldErrors.judul !== undefined ? (
-          <p id="judul-error" role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400">
-            {fieldErrors.judul}
-          </p>
-        ) : (
-          <p id="judul-hint" className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            {judul.length}/{JUDUL_MAKS_KARAKTER} karakter.
+        {galat.judul !== undefined && (
+          <p id="galat-judul" className="text-sm text-red-700">
+            {galat.judul}
           </p>
         )}
       </div>
 
-      <div>
-        <label htmlFor="isi" className="block text-sm font-medium text-gray-900 dark:text-gray-100">
-          Isi Artikel
+      <div className="flex flex-col gap-1">
+        <label htmlFor="isi" className="text-sm font-medium text-gray-800">
+          Isi artikel
         </label>
         <textarea
           id="isi"
           name="isi"
-          ref={refIsi}
+          rows={10}
           value={isi}
-          onChange={handleIsiChange}
-          rows={12}
-          maxLength={ISI_MAKS_KARAKTER}
-          required
-          disabled={sedangMenyimpan}
-          aria-invalid={fieldErrors.isi !== undefined}
-          aria-describedby={fieldErrors.isi !== undefined ? "isi-error" : "isi-hint"}
-          placeholder="Tulis isi artikel di sini..."
-          className={`${KELAS_FIELD_DASAR} resize-y ${
-            fieldErrors.isi !== undefined ? KELAS_FIELD_ERROR : KELAS_FIELD_NORMAL
-          }`}
+          onChange={(event) => setIsi(event.target.value)}
+          disabled={formNonaktif}
+          aria-invalid={galat.isi !== undefined}
+          aria-describedby={galat.isi !== undefined ? "galat-isi" : undefined}
+          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-900 disabled:bg-gray-100"
         />
-        {fieldErrors.isi !== undefined ? (
-          <p id="isi-error" role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400">
-            {fieldErrors.isi}
-          </p>
-        ) : (
-          <p id="isi-hint" className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            {isi.length}/{ISI_MAKS_KARAKTER} karakter. Spasi saja tidak dihitung sebagai isi.
+        {galat.isi !== undefined && (
+          <p id="galat-isi" className="text-sm text-red-700">
+            {galat.isi}
           </p>
         )}
       </div>
 
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-        <Link href="/artikel" className={KELAS_TOMBOL_SEKUNDER}>
+      <UnggahGambarArtikel
+        idArtikel={null}
+        onBerkasDipilih={setBerkasGambar}
+        nonaktif={formNonaktif}
+      />
+
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="submit"
+          disabled={formNonaktif}
+          aria-busy={sedangMenyimpan}
+          className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {labelTombol}
+        </button>
+
+        <Link
+          href="/artikel"
+          className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-900"
+        >
           Batal
         </Link>
-        <button type="submit" disabled={sedangMenyimpan} className={KELAS_TOMBOL_UTAMA}>
-          {sedangMenyimpan ? "Menyimpan..." : "Simpan Artikel"}
-        </button>
       </div>
     </form>
   );
